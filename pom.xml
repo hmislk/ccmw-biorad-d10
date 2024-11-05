@@ -30,30 +30,6 @@
             <version>20240303</version>
             <type>jar</type>
         </dependency>
-        <!-- HAPI FHIR Core -->
-        <dependency>
-            <groupId>ca.uhn.hapi.fhir</groupId>
-            <artifactId>hapi-fhir-base</artifactId>
-            <version>6.2.0</version>
-        </dependency>
-        <!-- HAPI FHIR Client -->
-        <dependency>
-            <groupId>ca.uhn.hapi.fhir</groupId>
-            <artifactId>hapi-fhir-client</artifactId>
-            <version>6.2.0</version>
-        </dependency>
-        <!-- HAPI FHIR Structures R4 -->
-        <dependency>
-            <groupId>ca.uhn.hapi.fhir</groupId>
-            <artifactId>hapi-fhir-structures-r4</artifactId>
-            <version>6.2.0</version>
-        </dependency>
-        <!-- HAPI FHIR Validation (optional) -->
-        <dependency>
-            <groupId>ca.uhn.hapi.fhir</groupId>
-            <artifactId>hapi-fhir-validation</artifactId>
-            <version>6.2.0</version>
-        </dependency>
     </dependencies>
 
     <build>
@@ -89,6 +65,10 @@
                                         <exclude>META-INF/*.RSA</exclude>
                                         <exclude>META-INF/LICENSE*</exclude>
                                         <exclude>META-INF/NOTICE*</exclude>
+                                        <exclude>META-INF/DEPENDENCIES</exclude>
+                                        <exclude>META-INF/*.txt</exclude>
+                                        <exclude>META-INF/versions/**</exclude>
+                                        <exclude>META-INF/module-info.class</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
@@ -98,6 +78,7 @@
             </plugin>
         </plugins>
     </build>
+
 
 
     <repositories>

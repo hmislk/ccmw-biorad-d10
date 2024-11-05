@@ -34,6 +34,10 @@
                     <exclude>META-INF/*.RSA</exclude>
                     <exclude>META-INF/LICENSE*</exclude>
                     <exclude>META-INF/NOTICE*</exclude>
+                    <exclude>META-INF/DEPENDENCIES</exclude>
+                    <exclude>META-INF/*.txt</exclude>
+                    <exclude>META-INF/versions/**</exclude>
+                    <exclude>META-INF/module-info.class</exclude>
                   </excludes>
                 </filter>
               </filters>
