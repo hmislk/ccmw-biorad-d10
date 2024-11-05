@@ -1,0 +1,34 @@
+/target/
+/logs/
+# Compiled class files
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# IDE-specific files
+.classpath
+.project
+.settings/
+*.iml
+
+# Maven-specific files
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+
+# Gradle-specific files
+.gradle/
+build/
+
+# Logs
+*.log
+logs/
+
+# Other temporary files
+hs_err_pid*
+replay_pid*

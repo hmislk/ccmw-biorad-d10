@@ -1,0 +1,21 @@
+{
+    "middlewareSettings": {
+        "analyzerDetails": {
+            "analyzerName": "MataraD10",
+            "serialNumber": "0001",
+            "analyzerId": "218",
+            "departmentAnalyzerId": "193712",
+            "analyzerBaseURL": "http://192.168.203.238/Dia/DiaWeb.cgi/",
+            "departmentId": "9039"
+        },
+        "limsSettings": {
+            "limsServerBaseUrl": "https://rh.carecode.org/rh/api/limsmw",
+            "username": "buddhika",
+            "password": "Buddhika123@"
+        },
+        "communication": {
+            "queryFrequencyInMinutes": 1,
+            "queryForYesterdayResults": true
+        }
+    }
+}
