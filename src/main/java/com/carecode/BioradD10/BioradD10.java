@@ -15,6 +15,11 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.security.cert.X509Certificate;
 import java.io.*;
 import java.net.ConnectException;
 import java.net.HttpURLConnection;
@@ -55,6 +60,7 @@ public class BioradD10 {
     private static String chromatogramDirectory;
     private static String chromatogramObservationCodeSystem;
     private static String chromatogramObservationCode;
+    private static boolean disableSslVerification;
 
     public BioradD10() {
     }
@@ -90,6 +96,11 @@ public class BioradD10 {
             if (middlewareSettings.has("chromatogramObservationCode")) {
                 chromatogramObservationCode = middlewareSettings.getString("chromatogramObservationCode");
                 logger.info("Chromatogram LIMS code: " + chromatogramObservationCodeSystem + " / " + chromatogramObservationCode);
+            }
+            if (middlewareSettings.has("disableSslVerification")
+                    && middlewareSettings.getBoolean("disableSslVerification")) {
+                disableSslVerification = true;
+                trustAllCertificates();
             }
 
             logger.info("Configuration loaded successfully");
@@ -549,6 +560,30 @@ public class BioradD10 {
         } catch (IOException e) {
             logger.log(Level.WARNING, "Error fetching bytes from: " + urlString, e);
             return null;
+        }
+    }
+
+    /**
+     * Installs a trust-all SSL context so self-signed certificates are accepted.
+     * Only called when disableSslVerification=true in config.
+     * Do NOT enable this in production environments.
+     */
+    private static void trustAllCertificates() {
+        try {
+            TrustManager[] trustAll = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] c, String a) {}
+                    public void checkServerTrusted(X509Certificate[] c, String a) {}
+                }
+            };
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, trustAll, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+            logger.warning("SSL verification DISABLED — for development use only");
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Failed to disable SSL verification", e);
         }
     }
 }
