@@ -6,6 +6,15 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 import java.io.*;
 import java.net.ConnectException;
 import java.net.HttpURLConnection;
@@ -43,6 +52,7 @@ public class BioradD10 {
     static String analyzerId;
     static String departmentAnalyzerId;
     static String analyzerName;
+    private static String chromatogramDirectory;
 
     public BioradD10() {
     }
@@ -67,6 +77,11 @@ public class BioradD10 {
             analyzerName = analyzerDetails.getString("analyzerName");
             analyzerId = analyzerDetails.getString("analyzerId");
             departmentAnalyzerId = analyzerDetails.getString("departmentAnalyzerId");
+
+            if (middlewareSettings.has("chromatogramDirectory")) {
+                chromatogramDirectory = middlewareSettings.getString("chromatogramDirectory");
+                logger.info("Chromatogram directory: " + chromatogramDirectory);
+            }
 
             logger.info("Configuration loaded successfully");
         } catch (Exception e) {
@@ -309,6 +324,12 @@ public class BioradD10 {
                 List<Map.Entry<String, String>> todayData = extractSampleData(htmlContent);
                 if (!todayData.isEmpty()) {
                     sendObservationsToLims(todayData, new Date());
+                    Map<String, String> todayKeys = extractCheckboxKeys(htmlContent);
+                    Date todayDate = new Date();
+                    for (Map.Entry<String, String> entry : todayData) {
+                        String ck = todayKeys.get(entry.getKey());
+                        if (ck != null) downloadAndSaveChromatogram(entry.getKey(), ck, todayDate);
+                    }
                 }
             }
         }
@@ -323,6 +344,11 @@ public class BioradD10 {
                     List<Map.Entry<String, String>> yesterdayData = extractSampleData(htmlContent);
                     if (!yesterdayData.isEmpty()) {
                         sendObservationsToLims(yesterdayData, yday);
+                        Map<String, String> ydayKeys = extractCheckboxKeys(htmlContent);
+                        for (Map.Entry<String, String> entry : yesterdayData) {
+                            String ck = ydayKeys.get(entry.getKey());
+                            if (ck != null) downloadAndSaveChromatogram(entry.getKey(), ck, yday);
+                        }
                     }
                 }
             }
@@ -374,5 +400,106 @@ public class BioradD10 {
         }
 
         logger.info("Main method ended");
+    }
+
+    // -------------------------------------------------------------------------
+    // Chromatogram extraction — Issue #1
+    // -------------------------------------------------------------------------
+
+    /**
+     * Parses checkbox values from the DiaWeb results HTML.
+     * Each checkbox VALUE is a full unique key, e.g. "13876561 1-47-16-5-2026-R".
+     * Returns a map of sampleId (part before the first space) -> full checkbox key.
+     */
+    public static Map<String, String> extractCheckboxKeys(String htmlContent) {
+        Map<String, String> keys = new LinkedHashMap<>();
+        if (htmlContent == null || htmlContent.isEmpty()) return keys;
+        try {
+            Document doc = Jsoup.parse(htmlContent);
+            Elements checkboxes = doc.select("input[type=checkbox][name!=_allbox]");
+            for (Element cb : checkboxes) {
+                String val = cb.attr("value").trim();
+                if (!val.isEmpty()) {
+                    String sampleId = val.contains(" ") ? val.substring(0, val.indexOf(' ')) : val;
+                    keys.put(sampleId, val);
+                }
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Error extracting checkbox keys", e);
+        }
+        return keys;
+    }
+
+    /**
+     * Downloads the D10 PDF for a sample and saves the embedded chromatogram PNG to disk.
+     * Skips silently if chromatogramDirectory is not configured or the file already exists.
+     */
+    public static void downloadAndSaveChromatogram(String sampleId, String checkboxKey, Date date) {
+        if (chromatogramDirectory == null || chromatogramDirectory.isEmpty()) return;
+
+        SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy-MM-dd");
+        File outDir = new File(chromatogramDirectory);
+        outDir.mkdirs();
+        File outFile = new File(outDir, "chromatogram_" + sampleId + "_" + dateFmt.format(date) + ".png");
+
+        if (outFile.exists()) {
+            logger.info("Chromatogram already saved for: " + sampleId);
+            return;
+        }
+
+        String encodedKey = checkboxKey.replace(" ", "+");
+        String pdfUrl = analyzerBaseURL + "?page=pdf&test=HBA1C&nbfile=1&f0=" + encodedKey;
+        logger.info("Downloading chromatogram PDF for: " + sampleId);
+
+        byte[] pdfBytes = fetchBytes(pdfUrl);
+        if (pdfBytes == null) {
+            logger.warning("Could not download PDF for chromatogram: " + sampleId);
+            return;
+        }
+
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDPage page = doc.getPage(0);
+            PDResources resources = page.getResources();
+            for (COSName name : resources.getXObjectNames()) {
+                Object xobj = resources.getXObject(name);
+                if (xobj instanceof PDImageXObject) {
+                    BufferedImage bImg = ((PDImageXObject) xobj).getImage();
+                    ImageIO.write(bImg, "PNG", outFile);
+                    logger.info("Chromatogram saved: " + outFile.getAbsolutePath());
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to extract chromatogram for: " + sampleId, e);
+        }
+    }
+
+    /**
+     * Fetches raw bytes from a URL. Uses the same HTTP pattern as fetchHtmlContent.
+     */
+    private static byte[] fetchBytes(String urlString) {
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(urlString).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(30_000);
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                logger.warning("HTTP " + conn.getResponseCode() + " fetching: " + urlString);
+                return null;
+            }
+            try (InputStream is = conn.getInputStream();
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+                return baos.toByteArray();
+            }
+        } catch (ConnectException e) {
+            logger.warning("Cannot reach analyzer for PDF: " + e.getMessage());
+            return null;
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Error fetching bytes from: " + urlString, e);
+            return null;
+        }
     }
 }

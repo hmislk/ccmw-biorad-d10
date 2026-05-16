@@ -16,6 +16,7 @@
         "communication": {
             "queryFrequencyInMinutes": 1,
             "queryForYesterdayResults": true
-        }
+        },
+        "chromatogramDirectory": "D:\\D10\\chromatograms"
     }
 }
