@@ -1,11 +1,20 @@
 package com.carecode.BioradD10;
 
-import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.json.JSONObject;
+
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 import java.io.*;
 import java.net.ConnectException;
 import java.net.HttpURLConnection;
@@ -13,19 +22,20 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.cert.X509Certificate;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.logging.*;
+import javax.net.ssl.*;
 
 public class BioradD10 {
 
     private static final Logger logger = Logger.getLogger(BioradD10.class.getName());
 
     static {
-        // Configure logger to show all levels
         LogManager.getLogManager().reset();
         logger.setLevel(Level.ALL);
         ConsoleHandler ch = new ConsoleHandler();
@@ -43,6 +53,10 @@ public class BioradD10 {
     static String analyzerId;
     static String departmentAnalyzerId;
     static String analyzerName;
+    private static String chromatogramDirectory;
+    private static String chromatogramObservationCodeSystem;
+    private static String chromatogramObservationCode;
+    private static boolean disableSslVerification;
 
     public BioradD10() {
     }
@@ -60,13 +74,37 @@ public class BioradD10 {
             analyzerBaseURL = analyzerDetails.getString("analyzerBaseURL");
             queryFrequencyInMinutes = communicationSettings.getInt("queryFrequencyInMinutes");
             queryForYesterdayResults = communicationSettings.getBoolean("queryForYesterdayResults");
-            limsServerBaseUrl = limsSettings.getString("limsServerBaseUrl"); // Renamed for LIMS Server URL
+            limsServerBaseUrl = limsSettings.getString("limsServerBaseUrl");
             username = limsSettings.getString("username");
             password = limsSettings.getString("password");
             departmentId = analyzerDetails.getString("departmentId");
             analyzerName = analyzerDetails.getString("analyzerName");
             analyzerId = analyzerDetails.getString("analyzerId");
             departmentAnalyzerId = analyzerDetails.getString("departmentAnalyzerId");
+
+            if (middlewareSettings.has("chromatogramDirectory")) {
+                chromatogramDirectory = middlewareSettings.getString("chromatogramDirectory");
+                logger.info("Chromatogram directory: " + chromatogramDirectory);
+            }
+            // Support both key names for backward compatibility
+            if (middlewareSettings.has("chromatogramObservationCode")) {
+                chromatogramObservationCode = middlewareSettings.getString("chromatogramObservationCode");
+            } else if (middlewareSettings.has("chromatogramTestCode")) {
+                chromatogramObservationCode = middlewareSettings.getString("chromatogramTestCode");
+            }
+            if (middlewareSettings.has("chromatogramObservationCodeSystem")) {
+                chromatogramObservationCodeSystem = middlewareSettings.getString("chromatogramObservationCodeSystem");
+            }
+            if (chromatogramObservationCode != null) {
+                logger.info("Chromatogram observation: "
+                        + chromatogramObservationCodeSystem + " / " + chromatogramObservationCode);
+            }
+
+            if (middlewareSettings.has("disableSslVerification")
+                    && middlewareSettings.getBoolean("disableSslVerification")) {
+                disableSslVerification = true;
+                trustAllCertificates();
+            }
 
             logger.info("Configuration loaded successfully");
         } catch (Exception e) {
@@ -75,34 +113,19 @@ public class BioradD10 {
     }
 
     public static String generateUrlForDate(LocalDate date) {
-        logger.info("Generating URL for date: " + date);
-
-        try {
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MM/dd/yyyy");
-            String dateStr = date.format(formatter);
-
-            String url = analyzerBaseURL + "?page=result&test=HBA1C&StartDate=" + encodeDate(dateStr) + "&EndDate=" + encodeDate(dateStr);
-            logger.info("Generated URL: " + url);
-            return url;
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Exception occurred while generating URL", e);
-            return null;
-        }
-    }
-
-    private static String encodeDate(String date) {
-        return date.replace("/", "%2F");
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MM/dd/yyyy");
+        String dateStr = date.format(formatter);
+        String url = analyzerBaseURL + "?page=result&test=HBA1C&StartDate="
+                + dateStr.replace("/", "%2F") + "&EndDate=" + dateStr.replace("/", "%2F");
+        logger.info("Generated URL: " + url);
+        return url;
     }
 
     public static String fetchHtmlContent(String urlString) {
         logger.info("Fetching HTML content from URL: " + urlString);
-
         try {
-            URL url = new URL(urlString);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
             connection.setRequestMethod("GET");
-
-            logger.fine("Sending GET request to URL: " + urlString);
             int responseCode = connection.getResponseCode();
             logger.info("Response Code: " + responseCode);
 
@@ -110,256 +133,314 @@ public class BioradD10 {
                 BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
                 StringBuilder htmlContent = new StringBuilder();
                 String inputLine;
-
                 while ((inputLine = in.readLine()) != null) {
                     htmlContent.append(inputLine);
                 }
-
                 in.close();
-                logger.info("Fetched HTML content successfully");
                 return htmlContent.toString();
             } else {
                 logger.severe("Failed to fetch HTML content. HTTP Response Code: " + responseCode);
                 return null;
             }
         } catch (ConnectException e) {
-            logger.log(Level.SEVERE, "Connection timed out while fetching HTML content from URL: " + urlString, e);
-            return null; // Return null to indicate the connection timed out
+            logger.log(Level.SEVERE, "Connection timed out: " + urlString, e);
+            return null;
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "IOException occurred while fetching HTML content from URL: " + urlString, e);
-            return null; // Return null to indicate an IO error
+            logger.log(Level.SEVERE, "IOException: " + urlString, e);
+            return null;
         }
     }
 
     public static List<Map.Entry<String, String>> extractSampleData(String htmlContent) {
-        logger.info("Extracting Sample ID and HbA1c percentage from HTML content");
-
-        if (htmlContent == null) {
+        if (htmlContent == null || htmlContent.isEmpty()) {
             logger.info("No response from analyzer");
-            return null;
-        }
-        if (htmlContent.isEmpty()) {
-            logger.info("EMpty response");
-            return null;
+            return Collections.emptyList();
         }
 
         List<Map.Entry<String, String>> sampleData = new ArrayList<>();
-
         try {
             Document doc = Jsoup.parse(htmlContent);
             Elements rows = doc.select("table tr");
-
             for (Element row : rows) {
                 Elements cells = row.select("td");
-
                 if (cells.size() > 5) {
                     String sampleId = cells.get(3).text();
                     String hba1c = cells.get(5).text();
                     sampleData.add(new AbstractMap.SimpleEntry<>(sampleId, hba1c));
                 }
             }
-
-            logger.info("Sample data extraction successful");
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Exception occurred while extracting sample data", e);
+            logger.log(Level.SEVERE, "Exception extracting sample data", e);
         }
-
         return sampleData;
     }
 
-    public static void sendObservationsToLims(List<Map.Entry<String, String>> observations, Date date) {
+    public static Map<String, String> extractCheckboxKeys(String htmlContent) {
+        Map<String, String> keys = new LinkedHashMap<>();
+        if (htmlContent == null || htmlContent.isEmpty()) return keys;
+        try {
+            Document doc = Jsoup.parse(htmlContent);
+            Elements checkboxes = doc.select("input[type=checkbox][name!=_allbox]");
+            for (Element cb : checkboxes) {
+                String val = cb.attr("value").trim();
+                if (!val.isEmpty()) {
+                    String sampleId = val.contains(" ") ? val.substring(0, val.indexOf(' ')) : val;
+                    keys.put(sampleId, val);
+                }
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Error extracting checkbox keys", e);
+        }
+        return keys;
+    }
+
+    // -------------------------------------------------------------------------
+    // LIMS communication
+    // -------------------------------------------------------------------------
+
+    public static void sendObservationsToLims(List<Map.Entry<String, String>> observations,
+                                              Map<String, String> checkboxKeys,
+                                              Date date) {
         logger.info("Sending observations to LIMS");
 
-        // Determine the file name for the day's sample IDs
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
-        String fileName = "processed_samples_" + dateFormat.format(date) + ".txt";
+        String processedFileName = "processed_samples_" + dateFormat.format(date) + ".txt";
         Set<String> processedSamples = new HashSet<>();
 
-        // Load the processed samples from the file if it exists
         try {
-            Path path = Paths.get(fileName);
+            Path path = Paths.get(processedFileName);
             if (Files.exists(path)) {
-                System.out.println("Loading processed samples from file: " + fileName);
                 processedSamples.addAll(Files.readAllLines(path));
             }
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "Error reading processed samples file: " + fileName, e);
+            logger.log(Level.SEVERE, "Error reading processed samples file", e);
         }
 
-        // Prepare to write to the file
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(fileName, true))) {
+        String now = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ").format(new Date());
+
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(processedFileName, true))) {
             for (Map.Entry<String, String> entry : observations) {
                 String sampleId = entry.getKey();
-                String observationValue = entry.getValue();
+                String hba1cValue = entry.getValue();
 
-                // Check if the sample ID has already been processed
-                if (!processedSamples.contains(sampleId)) {
-                    System.out.println("Processing sample ID: " + sampleId + " with HbA1c value: " + observationValue);
+                if (processedSamples.contains(sampleId)) {
+                    logger.info("Sample " + sampleId + " already processed, skipping.");
+                    continue;
+                }
 
-                    // Create a custom JSON object to represent the observation
-                    JSONObject observationJson = new JSONObject();
-                    observationJson.put("sampleId", sampleId);
-                    observationJson.put("observationValue", observationValue);
-                    observationJson.put("analyzerId", analyzerId);
-                    observationJson.put("departmentAnalyzerId", departmentAnalyzerId);
-                    observationJson.put("analyzerName", analyzerName);
-                    observationJson.put("departmentId", departmentId);
-                    observationJson.put("username", username);
-                    observationJson.put("password", password);
-                    observationJson.put("observationValue", observationValue);
-                    observationJson.put("issuedDate", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ").format(new Date()));
+                // Build HbA1c observation
+                JSONObject obs = buildObservationJson(sampleId, hba1cValue,
+                        "http://loinc.org", "4548-4",
+                        "http://unitsofmeasure.org", "%", now);
 
-                    // Additional attributes for HbA1c percentage
-                    observationJson.put("observationValueCodingSystem", "http://loinc.org");
-                    observationJson.put("observationValueCode", "4548-4"); // Code for HbA1c as a percentage
-                    observationJson.put("observationUnitCodingSystem", "http://unitsofmeasure.org");
-                    observationJson.put("observationUnitCode", "%"); // Unit code for percentage
+                logger.info("Sending DataBundle to LIMS /observation for sample " + sampleId);
+                boolean sent = sendJsonToLimsServer(obs);
 
-                    // Log the JSON object
-                    System.out.println("Prepared Observation JSON: " + observationJson.toString(4));
+                if (sent) {
+                    // Send chromatogram as a second observation
+                    sendChromatogramObservation(sampleId, checkboxKeys, date, now);
 
-                    // Send the JSON object to the LIMS server
-                    System.out.println("Sending observation to LIMS server...");
-                    sendJsonToLimsServer(observationJson);
-
-                    // Write the sample ID to the file
                     writer.write(sampleId);
                     writer.newLine();
-
-                    // Add the sample ID to the processed set
                     processedSamples.add(sampleId);
+                    logger.info("Sample " + sampleId + " processed successfully.");
                 } else {
-                    logger.info("Sample ID " + sampleId + " has already been processed for today.");
+                    logger.warning("Failed to send results for sample " + sampleId);
                 }
             }
         } catch (IOException e) {
-            logger.log(Level.SEVERE, "Error writing to processed samples file: " + fileName, e);
+            logger.log(Level.SEVERE, "Error writing processed samples file", e);
         }
     }
 
-    public static void sendJsonToLimsServer(JSONObject observationJson) {
+    private static void sendChromatogramObservation(String sampleId, Map<String, String> checkboxKeys,
+                                                     Date date, String now) {
+        if (chromatogramObservationCode == null || chromatogramObservationCode.isEmpty()) return;
+        if (checkboxKeys == null) return;
+
+        String checkboxKey = checkboxKeys.get(sampleId);
+        if (checkboxKey == null) return;
+
+        byte[] pngBytes = getChromatogramPng(sampleId, checkboxKey, date);
+        if (pngBytes == null || pngBytes.length == 0) return;
+
+        String base64 = Base64.getEncoder().encodeToString(pngBytes);
+        String imageValue = "^Image^PNG^Base64^" + base64;
+
+        String codingSystem = (chromatogramObservationCodeSystem != null && !chromatogramObservationCodeSystem.isEmpty())
+                ? chromatogramObservationCodeSystem : "D10-IMG";
+
+        JSONObject imgObs = buildObservationJson(sampleId, imageValue,
+                codingSystem, chromatogramObservationCode,
+                "", "", now);
+
+        logger.info("Sending chromatogram observation for sample " + sampleId
+                + " (" + pngBytes.length + " bytes)");
+        sendJsonToLimsServer(imgObs);
+    }
+
+    private static JSONObject buildObservationJson(String sampleId, String value,
+                                                    String valueCodingSystem, String valueCode,
+                                                    String unitCodingSystem, String unitCode,
+                                                    String issuedDate) {
+        JSONObject obs = new JSONObject();
+        obs.put("sampleId", sampleId);
+        obs.put("observationValue", value);
+        obs.put("analyzerId", analyzerId);
+        obs.put("departmentAnalyzerId", departmentAnalyzerId);
+        obs.put("analyzerName", analyzerName);
+        obs.put("departmentId", departmentId);
+        obs.put("username", username);
+        obs.put("password", password);
+        obs.put("issuedDate", issuedDate);
+        obs.put("observationValueCodingSystem", valueCodingSystem);
+        obs.put("observationValueCode", valueCode);
+        obs.put("observationUnitCodingSystem", unitCodingSystem);
+        obs.put("observationUnitCode", unitCode);
+        return obs;
+    }
+
+    public static boolean sendJsonToLimsServer(JSONObject observationJson) {
         logger.info("Preparing to send JSON to LIMS server");
-
         try {
-            // Log the JSON being sent
-            logger.fine("Observation JSON: " + observationJson.toString(4));
-
-            // Create the URL and open the connection
             URL url = new URL(limsServerBaseUrl + "/observation");
-            logger.fine("LIMS Server URL: " + url.toString());
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 
-            // Set connection properties
             connection.setDoOutput(true);
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");
 
-            // Add Basic Authentication header
             String auth = username + ":" + password;
-            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
+            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes("UTF-8"));
             connection.setRequestProperty("Authorization", "Basic " + encodedAuth);
-            logger.fine("Authorization Header: Basic " + encodedAuth);
 
-            // Send JSON data
-            logger.fine("Sending data...");
-            OutputStream os = connection.getOutputStream();
-            os.write(observationJson.toString().getBytes());
-            os.flush();
-            os.close();
+            try (OutputStream os = connection.getOutputStream()) {
+                os.write(observationJson.toString().getBytes("UTF-8"));
+                os.flush();
+            }
 
-            // Get response code
             int responseCode = connection.getResponseCode();
             logger.info("Response Code: " + responseCode);
 
-            // Handle server response
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                BufferedReader br = new BufferedReader(new InputStreamReader((connection.getErrorStream())));
-                String output;
-                logger.severe("Error from Server:");
-                while ((output = br.readLine()) != null) {
-                    logger.severe(output);
-                }
+            if (responseCode >= 200 && responseCode < 300) {
+                BufferedReader br = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) response.append(line);
                 br.close();
+                logger.info("Response from Server: " + response);
+                return true;
             } else {
-                BufferedReader br = new BufferedReader(new InputStreamReader((connection.getInputStream())));
-                String output;
-                logger.info("Response from Server:");
-                while ((output = br.readLine()) != null) {
-                    logger.info(output);
+                InputStream errStream = connection.getErrorStream();
+                if (errStream != null) {
+                    BufferedReader br = new BufferedReader(new InputStreamReader(errStream));
+                    String line;
+                    logger.severe("Error from Server (HTTP " + responseCode + "):");
+                    while ((line = br.readLine()) != null) logger.severe(line);
+                    br.close();
                 }
-                br.close();
+                return false;
             }
-
-            connection.disconnect();
-
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Exception occurred while sending JSON to LIMS server", e);
+            logger.log(Level.SEVERE, "Exception sending to LIMS", e);
+            return false;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Chromatogram extraction
+    // -------------------------------------------------------------------------
+
+    private static byte[] getChromatogramPng(String sampleId, String checkboxKey, Date date) {
+        if (chromatogramDirectory == null || chromatogramDirectory.isEmpty()) return null;
+
+        SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy-MM-dd");
+        File outDir = new File(chromatogramDirectory);
+        outDir.mkdirs();
+        File outFile = new File(outDir, "chromatogram_" + sampleId + "_" + dateFmt.format(date) + ".png");
+
+        if (outFile.exists()) {
+            logger.info("Reading cached chromatogram from disk: " + outFile);
+            try {
+                return Files.readAllBytes(outFile.toPath());
+            } catch (IOException e) {
+                logger.log(Level.WARNING, "Failed to read cached chromatogram: " + outFile, e);
+                return null;
+            }
+        }
+
+        String encodedKey = checkboxKey.replace(" ", "+");
+        String pdfUrl = analyzerBaseURL + "?page=pdf&test=HBA1C&nbfile=1&f0=" + encodedKey;
+        logger.info("Downloading chromatogram PDF for: " + sampleId);
+
+        byte[] pdfBytes = fetchBytes(pdfUrl);
+        if (pdfBytes == null) {
+            logger.warning("Could not download PDF for chromatogram: " + sampleId);
+            return null;
+        }
+
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDPage page = doc.getPage(0);
+            PDResources resources = page.getResources();
+            for (COSName name : resources.getXObjectNames()) {
+                Object xobj = resources.getXObject(name);
+                if (xobj instanceof PDImageXObject) {
+                    BufferedImage bImg = ((PDImageXObject) xobj).getImage();
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    ImageIO.write(bImg, "PNG", baos);
+                    byte[] pngBytes = baos.toByteArray();
+                    Files.write(outFile.toPath(), pngBytes);
+                    logger.info("Chromatogram saved: " + outFile.getAbsolutePath());
+                    return pngBytes;
+                }
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to extract chromatogram for: " + sampleId, e);
+        }
+        return null;
+    }
+
+    // -------------------------------------------------------------------------
+    // Scheduling
+    // -------------------------------------------------------------------------
 
     public static void sendRequests() {
         logger.info("Sending requests for today's and potentially yesterday's results");
 
         LocalDate today = LocalDate.now();
-        String todayUrl = generateUrlForDate(today);
-        if (todayUrl != null) {
-            String htmlContent = fetchHtmlContent(todayUrl);
-            logger.info("HTML Content for today: " + htmlContent);
-            if (htmlContent != null) {
-                List<Map.Entry<String, String>> todayData = extractSampleData(htmlContent);
-                if (!todayData.isEmpty()) {
-                    sendObservationsToLims(todayData, new Date());
-                }
-            }
-        }
+        processDate(today, new Date());
+
         if (queryForYesterdayResults) {
             LocalDate yesterday = today.minusDays(1);
             Date yday = Date.from(yesterday.atStartOfDay(ZoneId.systemDefault()).toInstant());
-            String yesterdayUrl = generateUrlForDate(yesterday);
-            if (yesterdayUrl != null) {
-                String htmlContent = fetchHtmlContent(yesterdayUrl);
-                logger.info("HTML Content for yesterday: " + htmlContent);
-                if (htmlContent != null) {
-                    List<Map.Entry<String, String>> yesterdayData = extractSampleData(htmlContent);
-                    if (!yesterdayData.isEmpty()) {
-                        sendObservationsToLims(yesterdayData, yday);
-                    }
-                }
-            }
+            processDate(yesterday, yday);
         }
+    }
+
+    private static void processDate(LocalDate localDate, Date date) {
+        String url = generateUrlForDate(localDate);
+        if (url == null) return;
+
+        String htmlContent = fetchHtmlContent(url);
+        if (htmlContent == null) return;
+
+        List<Map.Entry<String, String>> sampleData = extractSampleData(htmlContent);
+        if (sampleData.isEmpty()) return;
+
+        Map<String, String> checkboxKeys = extractCheckboxKeys(htmlContent);
+        sendObservationsToLims(sampleData, checkboxKeys, date);
     }
 
     public static void main(String[] args) {
         logger.info("Main method started");
 
         try {
-            String configPath = "D:\\ccmw\\settings\\d10\\config.json"; // Directly referencing the config file in the project root
+            String configPath = args.length > 0
+                    ? args[0]
+                    : "D:\\ccmv\\settings\\d10\\config.json";
             loadConfig(configPath);
 
-            boolean testing = false;
-
-            if (testing) {
-                // TEMPORARY TESTING BLOCK
-                logger.info("Starting temporary test for sending a sample observation.");
-
-                // Simulated sample observation data
-                String testSampleId = "22311";
-                String testHbA1cValue = "4.58";
-
-                // Create a mock observation entry
-                Map.Entry<String, String> testEntry = new AbstractMap.SimpleEntry<>(testSampleId, testHbA1cValue);
-                List<Map.Entry<String, String>> testObservations = Collections.singletonList(testEntry);
-
-                // Send the test observation
-                sendObservationsToLims(testObservations, new Date());
-
-                logger.info("Temporary test completed.");
-                System.exit(0);
-
-            }
-
-            // NORMAL OPERATION
-            sendRequests(); // Initial request at the start
+            sendRequests();
 
             Timer timer = new Timer();
             timer.schedule(new TimerTask() {
@@ -367,12 +448,61 @@ public class BioradD10 {
                 public void run() {
                     sendRequests();
                 }
-            }, queryFrequencyInMinutes * 60 * 1000, queryFrequencyInMinutes * 60 * 1000); // Schedule at specified interval
+            }, queryFrequencyInMinutes * 60 * 1000L, queryFrequencyInMinutes * 60 * 1000L);
 
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Exception occurred in main method", e);
         }
 
         logger.info("Main method ended");
+    }
+
+    // -------------------------------------------------------------------------
+    // Utilities
+    // -------------------------------------------------------------------------
+
+    private static byte[] fetchBytes(String urlString) {
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(urlString).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(30_000);
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                logger.warning("HTTP " + conn.getResponseCode() + " fetching: " + urlString);
+                return null;
+            }
+            try (InputStream is = conn.getInputStream();
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+                return baos.toByteArray();
+            }
+        } catch (ConnectException e) {
+            logger.warning("Cannot reach analyzer: " + e.getMessage());
+            return null;
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Error fetching bytes: " + urlString, e);
+            return null;
+        }
+    }
+
+    private static void trustAllCertificates() {
+        try {
+            TrustManager[] trustAll = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] c, String a) {}
+                    public void checkServerTrusted(X509Certificate[] c, String a) {}
+                }
+            };
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, trustAll, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+            logger.warning("SSL verification DISABLED — for development use only");
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Failed to disable SSL verification", e);
+        }
     }
 }

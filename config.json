@@ -1,21 +1,24 @@
 {
     "middlewareSettings": {
         "analyzerDetails": {
-            "analyzerName": "MataraD10",
-            "serialNumber": "0001",
-            "analyzerId": "218",
-            "departmentAnalyzerId": "193712",
-            "analyzerBaseURL": "http://192.168.203.238/Dia/DiaWeb.cgi/",
-            "departmentId": "9039"
+            "analyzerName": "BioRadD10",
+            "serialNumber": "YOUR_SERIAL",
+            "analyzerId": "YOUR_ANALYZER_ID",
+            "departmentAnalyzerId": "YOUR_DEPT_ANALYZER_ID",
+            "analyzerBaseURL": "http://ANALYZER_IP/Dia/DiaWeb.cgi/",
+            "departmentId": "YOUR_DEPT_ID"
         },
         "limsSettings": {
-            "limsServerBaseUrl": "https://rh.carecode.org/rh/api/limsmw",
-            "username": "buddhika",
-            "password": "Buddhika123@"
+            "limsServerBaseUrl": "https://YOUR_HIMS_HOST/api/limsmw",
+            "username": "YOUR_USERNAME",
+            "password": "YOUR_PASSWORD"
         },
         "communication": {
             "queryFrequencyInMinutes": 1,
             "queryForYesterdayResults": true
-        }
+        },
+        "chromatogramDirectory": "D:\\D10\\chromatograms",
+        "chromatogramTestCode": "D10-CHROMATOGRAM",
+        "disableSslVerification": false
     }
 }
