@@ -1,7 +1,7 @@
 {
     "middlewareSettings": {
         "analyzerDetails": {
-            "analyzerName": "YOUR_ANALYZER_NAME",
+            "analyzerName": "BioRadD10",
             "serialNumber": "YOUR_SERIAL",
             "analyzerId": "YOUR_ANALYZER_ID",
             "departmentAnalyzerId": "YOUR_DEPT_ANALYZER_ID",
@@ -18,7 +18,7 @@
             "queryForYesterdayResults": true
         },
         "chromatogramDirectory": "D:\\D10\\chromatograms",
-        "chromatogramObservationCodeSystem": "D10-IMG",
-        "chromatogramObservationCode": "D10-CHROMATOGRAM"
+        "chromatogramTestCode": "D10-CHROMATOGRAM",
+        "disableSslVerification": false
     }
 }
