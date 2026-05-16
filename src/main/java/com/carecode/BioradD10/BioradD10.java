@@ -53,6 +53,8 @@ public class BioradD10 {
     static String departmentAnalyzerId;
     static String analyzerName;
     private static String chromatogramDirectory;
+    private static String chromatogramObservationCodeSystem;
+    private static String chromatogramObservationCode;
 
     public BioradD10() {
     }
@@ -81,6 +83,13 @@ public class BioradD10 {
             if (middlewareSettings.has("chromatogramDirectory")) {
                 chromatogramDirectory = middlewareSettings.getString("chromatogramDirectory");
                 logger.info("Chromatogram directory: " + chromatogramDirectory);
+            }
+            if (middlewareSettings.has("chromatogramObservationCodeSystem")) {
+                chromatogramObservationCodeSystem = middlewareSettings.getString("chromatogramObservationCodeSystem");
+            }
+            if (middlewareSettings.has("chromatogramObservationCode")) {
+                chromatogramObservationCode = middlewareSettings.getString("chromatogramObservationCode");
+                logger.info("Chromatogram LIMS code: " + chromatogramObservationCodeSystem + " / " + chromatogramObservationCode);
             }
 
             logger.info("Configuration loaded successfully");
@@ -464,14 +473,52 @@ public class BioradD10 {
                 Object xobj = resources.getXObject(name);
                 if (xobj instanceof PDImageXObject) {
                     BufferedImage bImg = ((PDImageXObject) xobj).getImage();
-                    ImageIO.write(bImg, "PNG", outFile);
+                    // encode to memory so we can both save to disk and send to LIMS
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    ImageIO.write(bImg, "PNG", baos);
+                    byte[] pngBytes = baos.toByteArray();
+                    Files.write(outFile.toPath(), pngBytes);
                     logger.info("Chromatogram saved: " + outFile.getAbsolutePath());
+                    sendChromatogramToLims(sampleId, pngBytes, date);
                     break;
                 }
             }
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to extract chromatogram for: " + sampleId, e);
         }
+    }
+
+    /**
+     * Base64-encodes the PNG and POSTs it to the LIMS /observation endpoint.
+     * Uses the same JSON structure as the HbA1c observation, with the image
+     * value formatted as: ^Image^PNG^Base64^<base64data>
+     * Skips silently if chromatogramObservationCode is not configured.
+     */
+    public static void sendChromatogramToLims(String sampleId, byte[] pngBytes, Date date) {
+        if (chromatogramObservationCode == null || chromatogramObservationCode.isEmpty()) return;
+
+        String base64 = Base64.getEncoder().encodeToString(pngBytes);
+        String observationValue = "^Image^PNG^Base64^" + base64;
+
+        JSONObject obs = new JSONObject();
+        obs.put("sampleId",                     sampleId);
+        obs.put("observationValue",             observationValue);
+        obs.put("analyzerId",                   analyzerId);
+        obs.put("departmentAnalyzerId",         departmentAnalyzerId);
+        obs.put("analyzerName",                 analyzerName);
+        obs.put("departmentId",                 departmentId);
+        obs.put("username",                     username);
+        obs.put("password",                     password);
+        obs.put("issuedDate",                   new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ").format(date));
+        obs.put("observationValueCodingSystem", chromatogramObservationCodeSystem);
+        obs.put("observationValueCode",         chromatogramObservationCode);
+        obs.put("observationUnitCodingSystem",  "http://unitsofmeasure.org");
+        obs.put("observationUnitCode",          "%");
+
+        logger.info("Sending chromatogram to LIMS: sample=" + sampleId
+                + "  code=" + chromatogramObservationCode
+                + "  bytes=" + pngBytes.length);
+        sendJsonToLimsServer(obs);
     }
 
     /**

@@ -17,6 +17,8 @@
             "queryFrequencyInMinutes": 1,
             "queryForYesterdayResults": true
         },
-        "chromatogramDirectory": "D:\\D10\\chromatograms"
+        "chromatogramDirectory": "D:\\D10\\chromatograms",
+        "chromatogramObservationCodeSystem": "D10-IMG",
+        "chromatogramObservationCode": "D10-CHROMATOGRAM"
     }
 }
