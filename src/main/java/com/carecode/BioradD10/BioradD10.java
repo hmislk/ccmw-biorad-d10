@@ -22,12 +22,14 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.cert.X509Certificate;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.logging.*;
+import javax.net.ssl.*;
 
 public class BioradD10 {
 
@@ -55,6 +57,7 @@ public class BioradD10 {
     private static String chromatogramDirectory;
     private static String chromatogramObservationCodeSystem;
     private static String chromatogramObservationCode;
+    private static boolean disableSslVerification;
 
     public BioradD10() {
     }
@@ -90,6 +93,12 @@ public class BioradD10 {
             if (middlewareSettings.has("chromatogramObservationCode")) {
                 chromatogramObservationCode = middlewareSettings.getString("chromatogramObservationCode");
                 logger.info("Chromatogram LIMS code: " + chromatogramObservationCodeSystem + " / " + chromatogramObservationCode);
+            }
+            if (middlewareSettings.has("disableSslVerification")) {
+                disableSslVerification = middlewareSettings.getBoolean("disableSslVerification");
+                if (disableSslVerification) {
+                    logger.info("SSL verification disabled");
+                }
             }
 
             logger.info("Configuration loaded successfully");
@@ -261,17 +270,28 @@ public class BioradD10 {
         }
     }
 
-    public static void sendJsonToLimsServer(JSONObject observationJson) {
+    public static boolean sendJsonToLimsServer(JSONObject observationJson) {
         logger.info("Preparing to send JSON to LIMS server");
 
         try {
-            // Log the JSON being sent
-            logger.fine("Observation JSON: " + observationJson.toString(4));
-
             // Create the URL and open the connection
             URL url = new URL(limsServerBaseUrl + "/observation");
             logger.fine("LIMS Server URL: " + url.toString());
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+            // Disable SSL verification if configured
+            if (disableSslVerification && connection instanceof HttpsURLConnection) {
+                HttpsURLConnection httpsConn = (HttpsURLConnection) connection;
+                TrustManager[] trustAll = new TrustManager[]{new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return null; }
+                    public void checkClientTrusted(X509Certificate[] certs, String t) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String t) {}
+                }};
+                SSLContext sc = SSLContext.getInstance("TLS");
+                sc.init(null, trustAll, new java.security.SecureRandom());
+                httpsConn.setSSLSocketFactory(sc.getSocketFactory());
+                httpsConn.setHostnameVerifier((hostname, session) -> true);
+            }
 
             // Set connection properties
             connection.setDoOutput(true);
@@ -282,10 +302,8 @@ public class BioradD10 {
             String auth = username + ":" + password;
             String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
             connection.setRequestProperty("Authorization", "Basic " + encodedAuth);
-            logger.fine("Authorization Header: Basic " + encodedAuth);
 
             // Send JSON data
-            logger.fine("Sending data...");
             OutputStream os = connection.getOutputStream();
             os.write(observationJson.toString().getBytes());
             os.flush();
@@ -295,16 +313,8 @@ public class BioradD10 {
             int responseCode = connection.getResponseCode();
             logger.info("Response Code: " + responseCode);
 
-            // Handle server response
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                BufferedReader br = new BufferedReader(new InputStreamReader((connection.getErrorStream())));
-                String output;
-                logger.severe("Error from Server:");
-                while ((output = br.readLine()) != null) {
-                    logger.severe(output);
-                }
-                br.close();
-            } else {
+            // Handle server response (2xx = success)
+            if (responseCode >= 200 && responseCode < 300) {
                 BufferedReader br = new BufferedReader(new InputStreamReader((connection.getInputStream())));
                 String output;
                 logger.info("Response from Server:");
@@ -312,12 +322,24 @@ public class BioradD10 {
                     logger.info(output);
                 }
                 br.close();
+                return true;
+            } else {
+                InputStream errStream = connection.getErrorStream();
+                if (errStream != null) {
+                    BufferedReader br = new BufferedReader(new InputStreamReader(errStream));
+                    String output;
+                    logger.severe("Error from Server (HTTP " + responseCode + "):");
+                    while ((output = br.readLine()) != null) {
+                        logger.severe(output);
+                    }
+                    br.close();
+                }
+                return false;
             }
-
-            connection.disconnect();
 
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Exception occurred while sending JSON to LIMS server", e);
+            return false;
         }
     }
 
@@ -448,45 +470,82 @@ public class BioradD10 {
     public static void downloadAndSaveChromatogram(String sampleId, String checkboxKey, Date date) {
         if (chromatogramDirectory == null || chromatogramDirectory.isEmpty()) return;
 
+        // Track which chromatograms have been sent to LIMS to avoid resending on each loop
         SimpleDateFormat dateFmt = new SimpleDateFormat("yyyy-MM-dd");
+        String sentFileName = "processed_chromatograms_" + dateFmt.format(date) + ".txt";
+        Set<String> sentChromatograms = new HashSet<>();
+        try {
+            Path sentPath = Paths.get(sentFileName);
+            if (Files.exists(sentPath)) {
+                sentChromatograms.addAll(Files.readAllLines(sentPath));
+            }
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Error reading chromatogram tracking file", e);
+        }
+
+        if (sentChromatograms.contains(sampleId)) {
+            logger.fine("Chromatogram already sent to LIMS for: " + sampleId);
+            return;
+        }
+
         File outDir = new File(chromatogramDirectory);
         outDir.mkdirs();
         File outFile = new File(outDir, "chromatogram_" + sampleId + "_" + dateFmt.format(date) + ".png");
 
+        byte[] pngBytes = null;
+
         if (outFile.exists()) {
-            logger.info("Chromatogram already saved for: " + sampleId);
-            return;
+            // File exists on disk but was not yet sent to LIMS (e.g. previous SSL failure)
+            logger.info("Chromatogram file exists on disk, reading for LIMS send: " + sampleId);
+            try {
+                pngBytes = Files.readAllBytes(outFile.toPath());
+            } catch (IOException e) {
+                logger.log(Level.WARNING, "Failed to read existing chromatogram file: " + outFile, e);
+                return;
+            }
+        } else {
+            // Download from analyzer and save to disk
+            String encodedKey = checkboxKey.replace(" ", "+");
+            String pdfUrl = analyzerBaseURL + "?page=pdf&test=HBA1C&nbfile=1&f0=" + encodedKey;
+            logger.info("Downloading chromatogram PDF for: " + sampleId);
+
+            byte[] pdfBytes = fetchBytes(pdfUrl);
+            if (pdfBytes == null) {
+                logger.warning("Could not download PDF for chromatogram: " + sampleId);
+                return;
+            }
+
+            try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+                PDPage page = doc.getPage(0);
+                PDResources resources = page.getResources();
+                for (COSName name : resources.getXObjectNames()) {
+                    Object xobj = resources.getXObject(name);
+                    if (xobj instanceof PDImageXObject) {
+                        BufferedImage bImg = ((PDImageXObject) xobj).getImage();
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        ImageIO.write(bImg, "PNG", baos);
+                        pngBytes = baos.toByteArray();
+                        Files.write(outFile.toPath(), pngBytes);
+                        logger.info("Chromatogram saved: " + outFile.getAbsolutePath());
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Failed to extract chromatogram for: " + sampleId, e);
+                return;
+            }
         }
 
-        String encodedKey = checkboxKey.replace(" ", "+");
-        String pdfUrl = analyzerBaseURL + "?page=pdf&test=HBA1C&nbfile=1&f0=" + encodedKey;
-        logger.info("Downloading chromatogram PDF for: " + sampleId);
-
-        byte[] pdfBytes = fetchBytes(pdfUrl);
-        if (pdfBytes == null) {
-            logger.warning("Could not download PDF for chromatogram: " + sampleId);
-            return;
-        }
-
-        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
-            PDPage page = doc.getPage(0);
-            PDResources resources = page.getResources();
-            for (COSName name : resources.getXObjectNames()) {
-                Object xobj = resources.getXObject(name);
-                if (xobj instanceof PDImageXObject) {
-                    BufferedImage bImg = ((PDImageXObject) xobj).getImage();
-                    // encode to memory so we can both save to disk and send to LIMS
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    ImageIO.write(bImg, "PNG", baos);
-                    byte[] pngBytes = baos.toByteArray();
-                    Files.write(outFile.toPath(), pngBytes);
-                    logger.info("Chromatogram saved: " + outFile.getAbsolutePath());
-                    sendChromatogramToLims(sampleId, pngBytes, date);
-                    break;
+        if (pngBytes != null && pngBytes.length > 0) {
+            boolean sent = sendChromatogramToLims(sampleId, pngBytes, date);
+            if (sent) {
+                try (BufferedWriter writer = new BufferedWriter(new FileWriter(sentFileName, true))) {
+                    writer.write(sampleId);
+                    writer.newLine();
+                } catch (IOException e) {
+                    logger.log(Level.WARNING, "Error writing chromatogram tracking file", e);
                 }
             }
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to extract chromatogram for: " + sampleId, e);
         }
     }
 
@@ -496,8 +555,8 @@ public class BioradD10 {
      * value formatted as: ^Image^PNG^Base64^<base64data>
      * Skips silently if chromatogramObservationCode is not configured.
      */
-    public static void sendChromatogramToLims(String sampleId, byte[] pngBytes, Date date) {
-        if (chromatogramObservationCode == null || chromatogramObservationCode.isEmpty()) return;
+    public static boolean sendChromatogramToLims(String sampleId, byte[] pngBytes, Date date) {
+        if (chromatogramObservationCode == null || chromatogramObservationCode.isEmpty()) return false;
 
         String base64 = Base64.getEncoder().encodeToString(pngBytes);
         String observationValue = "^Image^PNG^Base64^" + base64;
@@ -520,7 +579,7 @@ public class BioradD10 {
         logger.info("Sending chromatogram to LIMS: sample=" + sampleId
                 + "  code=" + chromatogramObservationCode
                 + "  bytes=" + pngBytes.length);
-        sendJsonToLimsServer(obs);
+        return sendJsonToLimsServer(obs);
     }
 
     /**
