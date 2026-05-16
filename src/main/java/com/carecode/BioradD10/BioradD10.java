@@ -368,7 +368,9 @@ public class BioradD10 {
         logger.info("Main method started");
 
         try {
-            String configPath = "D:\\ccmw\\settings\\d10\\config.json"; // Directly referencing the config file in the project root
+            String configPath = args.length > 0
+                    ? args[0]
+                    : "D:\\ccmv\\settings\\d10\\config.json";
             loadConfig(configPath);
 
             boolean testing = false;
