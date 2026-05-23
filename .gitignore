@@ -37,4 +37,4 @@ replay_pid*
 config.json
 
 # Result logs
-biorad_D10_logs/
+middlewere_logs/
