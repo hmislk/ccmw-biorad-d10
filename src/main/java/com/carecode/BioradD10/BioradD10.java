@@ -198,6 +198,10 @@ public class BioradD10 {
     // LIMS communication
     // -------------------------------------------------------------------------
 
+    private static final String RESULT_LOG_DIR = "boorad_D10_logs/result_log";
+    private static final String RESULT_LOG_SEP  = "+-----------------------+------------------+------------+-------------+------------+";
+    private static final String RESULT_LOG_HDR  = "| Sent At               | Sample ID        | Test Code  | Result      | Units      |";
+
     public static void sendObservationsToLims(List<Map.Entry<String, String>> observations,
                                               Map<String, String> checkboxKeys,
                                               Date date) {
@@ -237,6 +241,9 @@ public class BioradD10 {
                 boolean sent = sendJsonToLimsServer(obs);
 
                 if (sent) {
+                    String sentAt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+                    writeResultLog(sentAt, sampleId, "HbA1c", hba1cValue, "%");
+
                     // Send chromatogram as a second observation
                     sendChromatogramObservation(sampleId, checkboxKeys, date, now);
 
@@ -250,6 +257,37 @@ public class BioradD10 {
             }
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Error writing processed samples file", e);
+        }
+    }
+
+    private static void writeResultLog(String sentAt, String sampleId, String testCode,
+                                        String result, String units) {
+        try {
+            Path dir = Paths.get(RESULT_LOG_DIR);
+            Files.createDirectories(dir);
+
+            // File name: d10-2026.05.22.txt  (use dots, derived from sentAt date)
+            String dateStr = sentAt.substring(0, 10).replace("-", ".");
+            Path logFile = dir.resolve("d10-" + dateStr + ".txt");
+
+            boolean isNew = !Files.exists(logFile);
+            try (BufferedWriter w = new BufferedWriter(new FileWriter(logFile.toFile(), true))) {
+                if (isNew) {
+                    w.write("================================================================"); w.newLine();
+                    w.write("  RESULT LOG — " + dateStr); w.newLine();
+                    w.write("================================================================"); w.newLine();
+                    w.write(RESULT_LOG_SEP); w.newLine();
+                    w.write(RESULT_LOG_HDR); w.newLine();
+                    w.write(RESULT_LOG_SEP); w.newLine();
+                }
+                String row = String.format("| %-21s | %-16s | %-10s | %-11s | %-10s |",
+                        sentAt, sampleId, testCode, result, units);
+                w.write(row); w.newLine();
+                w.write(RESULT_LOG_SEP); w.newLine();
+            }
+            logger.info("Result logged: " + logFile);
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Failed to write result log", e);
         }
     }
 

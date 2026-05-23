@@ -52,6 +52,10 @@
       <id>oss.sonatype.org</id>
       <url>https://oss.sonatype.org/content/repositories/releases</url>
     </repository>
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
+    </repository>
   </repositories>
   <properties>
     <maven.compiler.target>11</maven.compiler.target>
