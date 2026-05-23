@@ -198,7 +198,8 @@ public class BioradD10 {
     // LIMS communication
     // -------------------------------------------------------------------------
 
-    private static final String RESULT_LOG_DIR = "biorad_D10_logs/result_log";
+    private static final String RESULT_LOG_DIR      = "biorad_D10_logs/result_log";
+    private static final String PROCESSED_SAMPLES_DIR = "biorad_D10_logs/processed_samples";
     private static final String RESULT_LOG_SEP  = "+-----------------------+------------------+------------+-------------+------------+";
     private static final String RESULT_LOG_HDR  = "| Sent At               | Sample ID        | Test Code  | Result      | Units      |";
 
@@ -209,12 +210,19 @@ public class BioradD10 {
 
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
         String processedFileName = "processed_samples_" + dateFormat.format(date) + ".txt";
-        Set<String> processedSamples = new HashSet<>();
 
+        Path processedDir = Paths.get(PROCESSED_SAMPLES_DIR);
         try {
-            Path path = Paths.get(processedFileName);
-            if (Files.exists(path)) {
-                processedSamples.addAll(Files.readAllLines(path));
+            Files.createDirectories(processedDir);
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "Error creating processed samples directory", e);
+        }
+        Path processedFilePath = processedDir.resolve(processedFileName);
+
+        Set<String> processedSamples = new HashSet<>();
+        try {
+            if (Files.exists(processedFilePath)) {
+                processedSamples.addAll(Files.readAllLines(processedFilePath));
             }
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Error reading processed samples file", e);
@@ -222,7 +230,7 @@ public class BioradD10 {
 
         String now = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ").format(new Date());
 
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(processedFileName, true))) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(processedFilePath.toFile(), true))) {
             for (Map.Entry<String, String> entry : observations) {
                 String sampleId = entry.getKey();
                 String hba1cValue = entry.getValue();
