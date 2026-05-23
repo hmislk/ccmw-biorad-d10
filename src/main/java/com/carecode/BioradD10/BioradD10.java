@@ -198,7 +198,7 @@ public class BioradD10 {
     // LIMS communication
     // -------------------------------------------------------------------------
 
-    private static final String RESULT_LOG_DIR = "boorad_D10_logs/result_log";
+    private static final String RESULT_LOG_DIR = "biorad_D10_logs/result_log";
     private static final String RESULT_LOG_SEP  = "+-----------------------+------------------+------------+-------------+------------+";
     private static final String RESULT_LOG_HDR  = "| Sent At               | Sample ID        | Test Code  | Result      | Units      |";
 
