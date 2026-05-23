@@ -17,7 +17,7 @@
             "queryFrequencyInMinutes": 1,
             "queryForYesterdayResults": true
         },
-        "chromatogramDirectory": "D:\\D10\\chromatograms",
+        "chromatogramDirectory": "chromatograms_save_path",
         "chromatogramTestCode": "D10-CHROMATOGRAM",
         "disableSslVerification": false
     }
