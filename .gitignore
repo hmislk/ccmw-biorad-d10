@@ -35,7 +35,6 @@ replay_pid*
 
 # Local config — keep production credentials out of the repo
 config.json
-processed_samples_*.txt
 
 # Result logs
-boorad_D10_logs/
+biorad_D10_logs/
